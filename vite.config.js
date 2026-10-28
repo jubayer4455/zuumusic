@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { Ytdl, Quality } from '@distube/ytdl-core'
+import searchHandler from './api/search.js'
+import trendingHandler from './api/trending.js'
 
 const ytdl = new Ytdl();
 const audioStreamCache = new Map();
@@ -92,6 +94,64 @@ function youtubeAudioStreamPlugin() {
           });
           res.end();
         }
+      }
+      return;
+    }
+
+    if (req.url && req.url.startsWith('/api/search')) {
+      try {
+        const urlObj = new URL(req.url, 'http://localhost');
+        const mockReq = {
+          method: req.method,
+          query: Object.fromEntries(urlObj.searchParams.entries())
+        };
+        const mockRes = {
+          setHeader: (k, v) => res.setHeader(k, v),
+          status: (code) => {
+            res.statusCode = code;
+            return {
+              json: (data) => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(data));
+              },
+              end: () => res.end()
+            };
+          }
+        };
+        await searchHandler(mockReq, mockRes);
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ results: [], error: err.message }));
+      }
+      return;
+    }
+
+    if (req.url && req.url.startsWith('/api/trending')) {
+      try {
+        const urlObj = new URL(req.url, 'http://localhost');
+        const mockReq = {
+          method: req.method,
+          query: Object.fromEntries(urlObj.searchParams.entries())
+        };
+        const mockRes = {
+          setHeader: (k, v) => res.setHeader(k, v),
+          status: (code) => {
+            res.statusCode = code;
+            return {
+              json: (data) => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(data));
+              },
+              end: () => res.end()
+            };
+          }
+        };
+        await trendingHandler(mockReq, mockRes);
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ results: [], error: err.message }));
       }
       return;
     }
