@@ -70,6 +70,19 @@ export const searchYouTubeMusic = async (query, maxResults = 20) => {
   }
 };
 
+const FALLBACK_STREAM_URLS = [
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3"
+];
+
 /**
  * Fetch YouTube Trending / Most Popular Music
  */
@@ -85,7 +98,7 @@ export const fetchTrendingYouTubeMusic = async (maxResults = 20) => {
     if (!response.ok) throw new Error(`YouTube Trending API error: ${response.status}`);
 
     const data = await response.json();
-    const formattedTracks = (data.items || []).map((item) => {
+    const formattedTracks = (data.items || []).map((item, idx) => {
       const durationInfo = parseISO8601Duration(item.contentDetails?.duration);
       return {
         id: `yt-${item.id}`,
@@ -97,6 +110,8 @@ export const fetchTrendingYouTubeMusic = async (maxResults = 20) => {
         cover: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
         duration: durationInfo.formatted,
         durationSec: durationInfo.seconds,
+        audioUrl: `/api/stream?id=${item.id}`,
+        fallbackUrl: FALLBACK_STREAM_URLS[idx % FALLBACK_STREAM_URLS.length],
         plays: formatViewCount(item.statistics?.viewCount),
         dateAdded: "Trending Now",
         genre: "trending"
@@ -136,6 +151,8 @@ const formatSearchResults = (items) => {
       cover: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
       duration: "3:30",
       durationSec: 210,
+      audioUrl: `/api/stream?id=${videoId}`,
+      fallbackUrl: FALLBACK_STREAM_URLS[index % FALLBACK_STREAM_URLS.length],
       plays: "Live Stream",
       dateAdded: "YouTube",
       genre: "youtube"

@@ -23,7 +23,7 @@ import { YouTubePlayer } from './components/YouTubePlayer';
 import { useMusic } from './context/MusicContext';
 
 function ZuuMusicApp() {
-  const { currentTrack } = useMusic();
+  const { currentTrack, isVideoMode } = useMusic();
 
   const getAmbientGlow = () => {
     if (!currentTrack) return 'from-emerald-950/30 via-neutral-900 to-[#121212]';
@@ -107,8 +107,8 @@ function ZuuMusicApp() {
       {/* Floating Pill Toast Notification */}
       <Toast />
 
-      {/* Global YouTube Player Engine */}
-      <YouTubePlayer />
+      {/* Global YouTube Player Engine: Only mounted in Video Mode to protect background audio */}
+      {isVideoMode && <YouTubePlayer />}
     </div>
   );
 }

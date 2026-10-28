@@ -688,14 +688,25 @@ export const MusicProvider = ({ children }) => {
       }
     };
 
+    const handleAudioError = () => {
+      console.warn("Audio element error on src, trying fallbackUrl:", audio.src);
+      if (currentTrack?.fallbackUrl && audio.src !== currentTrack.fallbackUrl) {
+        audio.src = currentTrack.fallbackUrl;
+        audio.load();
+        audio.play().then(() => setIsPlaying(true)).catch(() => {});
+      }
+    };
+
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('error', handleAudioError);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('error', handleAudioError);
     };
   }, [repeatMode, currentTrack, isSleepTimerEndOfTrack]);
 
@@ -741,18 +752,11 @@ export const MusicProvider = ({ children }) => {
       playPromise.then(() => {
         setIsPlaying(true);
       }).catch((err) => {
-        console.warn("Direct audio playback catch, checking fallback:", err);
-        // Fallback: If HTML5 audio stream fails (e.g. rate limit or offline),
-        // try playing through unmuted YouTube Player:
-        const ytPlayer = youtubePlayerRef.current;
-        if (track.youtubeId && ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
-          try {
-            if (!isMuted && typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
-            if (typeof ytPlayer.setVolume === 'function') ytPlayer.setVolume(Math.round(volume * 100));
-            ytPlayer.loadVideoById({ videoId: track.youtubeId, startSeconds: 0 });
-            ytPlayer.playVideo();
-            setIsPlaying(true);
-          } catch (e) {}
+        console.warn("Direct audio playback catch, trying fallbackUrl:", err);
+        if (track.fallbackUrl && audio.src !== track.fallbackUrl) {
+          audio.src = track.fallbackUrl;
+          audio.load();
+          audio.play().then(() => setIsPlaying(true)).catch(() => {});
         }
       });
     }
@@ -797,12 +801,11 @@ export const MusicProvider = ({ children }) => {
             try { ytPlayer.playVideo(); } catch (e) {}
           }
         }).catch((err) => {
-          console.warn("Toggle play audio catch:", err);
-          if (currentTrack?.youtubeId && ytPlayer && typeof ytPlayer.playVideo === 'function') {
-            try {
-              if (!isMuted && typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
-              ytPlayer.playVideo();
-            } catch (e) {}
+          console.warn("Toggle play audio catch, trying fallbackUrl:", err);
+          if (currentTrack?.fallbackUrl && audio.src !== currentTrack.fallbackUrl) {
+            audio.src = currentTrack.fallbackUrl;
+            audio.load();
+            audio.play().then(() => setIsPlaying(true)).catch(() => {});
           }
         });
       }
