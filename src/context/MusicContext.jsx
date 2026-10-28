@@ -306,41 +306,16 @@ export const MusicProvider = ({ children }) => {
   // Configure single unified audio element on mount
   useEffect(() => {
     const audio = audioRef.current;
-    audio.preload = 'auto';
-    audio.setAttribute('playsinline', 'true');
-    audio.setAttribute('webkit-playsinline', 'true');
-    audio.setAttribute('x-webkit-airplay', 'allow');
+    if (audio) {
+      audio.preload = 'auto';
+      audio.setAttribute('playsinline', 'true');
+      audio.setAttribute('webkit-playsinline', 'true');
+      audio.setAttribute('x-webkit-airplay', 'allow');
+    }
 
     if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
       setIsPwaInstalled(true);
     }
-  }, []);
-
-  // 100% Mobile Background & Lock Screen Keep-Alive
-  useEffect(() => {
-    const handleBackgroundWake = () => {
-      if (document.hidden) {
-        // When screen is locked or app is minimized to background
-        if (isPlayingRef.current && !userExplicitlyPausedRef.current) {
-          const audio = audioRef.current;
-          if (audio && audio.paused && audio.src) {
-            audio.play().catch(() => {});
-          }
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleBackgroundWake);
-    document.addEventListener('webkitvisibilitychange', handleBackgroundWake);
-    window.addEventListener('pagehide', handleBackgroundWake);
-    window.addEventListener('blur', handleBackgroundWake);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleBackgroundWake);
-      document.removeEventListener('webkitvisibilitychange', handleBackgroundWake);
-      window.removeEventListener('pagehide', handleBackgroundWake);
-      window.removeEventListener('blur', handleBackgroundWake);
-    };
   }, []);
 
   // Capture PWA beforeinstallprompt event
@@ -589,11 +564,18 @@ export const MusicProvider = ({ children }) => {
 
       navigator.mediaSession.setActionHandler('play', () => {
         userExplicitlyPausedRef.current = false;
-        togglePlay();
+        const audio = audioRef.current;
+        if (audio && audio.paused) {
+          audio.play().then(() => setIsPlaying(true)).catch(() => {});
+        }
       });
       navigator.mediaSession.setActionHandler('pause', () => {
         userExplicitlyPausedRef.current = true;
-        togglePlay();
+        const audio = audioRef.current;
+        if (audio && !audio.paused) {
+          audio.pause();
+          setIsPlaying(false);
+        }
       });
       navigator.mediaSession.setActionHandler('previoustrack', () => {
         handlePrevTrack();
@@ -619,17 +601,8 @@ export const MusicProvider = ({ children }) => {
   useEffect(() => {
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-      if (duration && !isNaN(duration) && duration > 0) {
-        try {
-          navigator.mediaSession.setPositionState({
-            duration: duration,
-            playbackRate: 1,
-            position: Math.min(currentTime, duration)
-          });
-        } catch (e) {}
-      }
     }
-  }, [isPlaying, currentTime, duration]);
+  }, [isPlaying]);
 
   // Live YouTube search debounce effect
   useEffect(() => {
@@ -741,11 +714,12 @@ export const MusicProvider = ({ children }) => {
     const streamUrl = track.isYouTube ? `/api/stream?id=${track.youtubeId}` : track.audioUrl;
 
     const audio = audioRef.current;
+    if (!audio) return;
+
     audio.pause();
     audio.playbackRate = playbackSpeed;
     audio.volume = isMuted ? 0 : volume;
     audio.src = streamUrl;
-    audio.load();
 
     const playPromise = audio.play();
     if (playPromise !== undefined) {
@@ -755,7 +729,6 @@ export const MusicProvider = ({ children }) => {
         console.warn("Direct audio playback catch, trying fallbackUrl:", err);
         if (track.fallbackUrl && audio.src !== track.fallbackUrl) {
           audio.src = track.fallbackUrl;
-          audio.load();
           audio.play().then(() => setIsPlaying(true)).catch(() => {});
         }
       });
@@ -1283,6 +1256,15 @@ export const MusicProvider = ({ children }) => {
         }
       }
     }}>
+      <audio
+        ref={audioRef}
+        id="zuu-master-audio"
+        playsInline
+        webkit-playsinline="true"
+        x-webkit-airplay="allow"
+        preload="auto"
+        className="hidden"
+      />
       {children}
     </MusicContext.Provider>
   );
