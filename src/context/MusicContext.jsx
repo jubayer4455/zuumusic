@@ -271,6 +271,7 @@ export const MusicProvider = ({ children }) => {
   const userExplicitlyPausedRef = useRef(false);
   const isPlayingRef = useRef(isPlaying);
   const currentTrackRef = useRef(currentTrack);
+  const lastHiddenTimestampRef = useRef(0);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -576,6 +577,15 @@ export const MusicProvider = ({ children }) => {
       });
 
       navigator.mediaSession.setActionHandler('pause', () => {
+        const timeSinceHidden = Date.now() - lastHiddenTimestampRef.current;
+        // On Android Chrome & PWAs, the OS automatically fires the 'pause' action handler
+        // during the background minimize transition. If document is hidden and
+        // the minimize transition occurred within the last 1500ms, IGNORE IT to protect background audio!
+        if (document.hidden && timeSinceHidden < 1500) {
+          console.log("Ignored OS minimize-triggered pause signal to protect background playback.");
+          return;
+        }
+
         userExplicitlyPausedRef.current = true;
         const audio = audioRef.current;
         if (audio) {
@@ -648,6 +658,7 @@ export const MusicProvider = ({ children }) => {
   // HTML5 Audio setup and listeners
   useEffect(() => {
     const audio = audioRef.current;
+    if (!audio) return;
     audio.volume = isMuted ? 0 : volume;
 
     const handleTimeUpdate = () => {
@@ -660,6 +671,35 @@ export const MusicProvider = ({ children }) => {
     const handleLoadedMetadata = () => {
       if (audio.duration && !isNaN(audio.duration) && audio.duration > 0) {
         setDuration(audio.duration);
+      }
+    };
+
+    const handleNativePlay = () => {
+      setIsPlaying(true);
+      userExplicitlyPausedRef.current = false;
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
+    };
+
+    const handleNativePause = () => {
+      const timeSinceHidden = Date.now() - lastHiddenTimestampRef.current;
+      // If the browser/OS paused the audio automatically on minimize without user intent:
+      if (document.hidden && !userExplicitlyPausedRef.current && isPlayingRef.current && timeSinceHidden < 3000) {
+        console.log("Audio auto-paused by OS on minimize. Auto-resuming background playback...");
+        setTimeout(() => {
+          if (!userExplicitlyPausedRef.current && audio.paused) {
+            audio.play().catch(() => {});
+          }
+        }, 50);
+        return;
+      }
+
+      if (userExplicitlyPausedRef.current) {
+        setIsPlaying(false);
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'paused';
+        }
       }
     };
 
@@ -690,16 +730,39 @@ export const MusicProvider = ({ children }) => {
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('play', handleNativePlay);
+    audio.addEventListener('pause', handleNativePause);
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('error', handleAudioError);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('play', handleNativePlay);
+      audio.removeEventListener('pause', handleNativePause);
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('error', handleAudioError);
     };
   }, [repeatMode, currentTrack, isSleepTimerEndOfTrack]);
+
+  // Page Visibility change protection for continuous background playback
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        lastHiddenTimestampRef.current = Date.now();
+        const audio = audioRef.current;
+        // If track was playing and user did not click pause, guarantee audio continues playing
+        if (isPlayingRef.current && !userExplicitlyPausedRef.current && audio && audio.paused) {
+          audio.play().catch(() => {});
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange, true);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange, true);
+    };
+  }, []);
 
   // Update volume on both players
   useEffect(() => {

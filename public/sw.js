@@ -1,8 +1,6 @@
 // Zuu Music Service Worker for Offline & Background Playback
-const CACHE_NAME = 'zuu-music-cache-v3';
+const CACHE_NAME = 'zuu-music-cache-v4';
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png'
@@ -23,6 +21,7 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         keys.map((key) => {
           if (key !== CACHE_NAME) {
+            console.log('Clearing old cache:', key);
             return caches.delete(key);
           }
         })
@@ -32,7 +31,7 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Cache first for static UI, Network first with fallback for others
+// Network First for Navigation/HTML to guarantee latest code, Cache First for static hashed assets
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
@@ -63,6 +62,25 @@ self.addEventListener('fetch', (event) => {
     return; // Pass through straight to native browser audio engine
   }
 
+  // Navigation requests (HTML) -> Network First!
+  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const copy = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match(event.request).then((cached) => cached || caches.match('/index.html'));
+        })
+    );
+    return;
+  }
+
+  // Static assets -> Cache First with Network Fallback
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
@@ -77,7 +95,6 @@ self.addEventListener('fetch', (event) => {
 
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
-            // Cache static scripts, styles, and UI icons
             if (
               url.pathname.endsWith('.js') ||
               url.pathname.endsWith('.css') ||
@@ -92,9 +109,8 @@ self.addEventListener('fetch', (event) => {
           return networkResponse;
         })
         .catch(() => {
-          if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
+          // Offline fallback
+          return null;
         });
     })
   );
