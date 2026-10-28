@@ -688,7 +688,7 @@ export const MusicProvider = ({ children }) => {
       } finally {
         setIsSearchingYouTube(false);
       }
-    }, 450);
+    }, 250);
 
     return () => clearTimeout(timeout);
   }, [searchQuery]);

@@ -180,7 +180,7 @@ export const searchYouTubeMusic = async (query, maxResults = 20) => {
   // 1. Primary Engine: Full-Length Official Catalog (Returns the FULL 3-4 minute song, never 30s cut!)
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
 
     const searchUrl = `/api/search?q=${encodeURIComponent(cleanQuery)}&limit=${maxResults}`;
     const res = await fetch(searchUrl, { signal: controller.signal });
@@ -274,6 +274,8 @@ export const searchYouTubeMusic = async (query, maxResults = 20) => {
     }
   }
 
-  searchCache.set(cacheKey, results);
+  if (results && results.length > 0) {
+    searchCache.set(cacheKey, results);
+  }
   return results;
 };
