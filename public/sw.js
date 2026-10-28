@@ -1,5 +1,5 @@
 // Zuu Music Service Worker for Offline & Background Playback
-const CACHE_NAME = 'zuu-music-cache-v1';
+const CACHE_NAME = 'zuu-music-cache-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -32,22 +32,35 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Cache first for static, Network first with fallback for others
+// Cache first for static UI, Network first with fallback for others
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Skip audio streaming, range requests, and external media from service worker caching
+  // CRITICAL FOR MOBILE BACKGROUND PLAYBACK:
+  // Never intercept native audio/video streams, byte-range chunks, or external media CDNs.
+  // Intercepting streaming audio in service workers crashes background audio decoding on Android & iOS!
   if (
-    url.pathname.startsWith('/api/') || 
-    url.origin.includes('googleapis.com') || 
-    url.origin.includes('youtube.com') || 
+    event.request.destination === 'audio' ||
+    event.request.destination === 'video' ||
+    event.request.headers.has('range') ||
+    url.origin.includes('audius.co') ||
+    url.origin.includes('open-audio-validator') ||
+    url.origin.includes('monophonic') ||
+    url.origin.includes('figment.io') ||
+    url.origin.includes('theblueprint.xyz') ||
+    url.origin.includes('staked.cloud') ||
     url.origin.includes('soundhelix.com') ||
-    url.origin.includes('freesound.org') ||
+    url.origin.includes('youtube.com') ||
+    url.origin.includes('googlevideo.com') ||
+    url.origin.includes('googleapis.com') ||
+    url.pathname.includes('/stream') ||
+    url.pathname.startsWith('/api/') ||
     url.pathname.endsWith('.mp3') ||
     url.pathname.endsWith('.m4a') ||
-    event.request.headers.get('range')
+    url.pathname.endsWith('.wav') ||
+    url.pathname.endsWith('.aac')
   ) {
-    return;
+    return; // Pass through straight to native browser audio engine
   }
 
   event.respondWith(
@@ -64,13 +77,13 @@ self.addEventListener('fetch', (event) => {
 
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
-            // Cache scripts, styles, images, and audio chunks
+            // Cache static scripts, styles, and UI icons
             if (
               url.pathname.endsWith('.js') ||
               url.pathname.endsWith('.css') ||
               url.pathname.endsWith('.png') ||
               url.pathname.endsWith('.jpg') ||
-              url.pathname.endsWith('.mp3')
+              url.pathname.endsWith('.svg')
             ) {
               cache.put(event.request, responseToCache);
             }
@@ -79,7 +92,6 @@ self.addEventListener('fetch', (event) => {
           return networkResponse;
         })
         .catch(() => {
-          // If offline and request is page navigation, return index.html
           if (event.request.mode === 'navigate') {
             return caches.match('/index.html');
           }

@@ -547,53 +547,71 @@ export const MusicProvider = ({ children }) => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPlaying, volume, currentTrack, duration]);
 
-  // Media Session API Setup for Lockscreen & Background Playback
+  // Media Session API Setup for Lockscreen & Continuous Background Playback
   useEffect(() => {
-    if ('mediaSession' in navigator && currentTrack) {
+    if (!('mediaSession' in navigator) || !currentTrack) return;
+
+    try {
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: currentTrack.title,
-        artist: currentTrack.artist,
+        title: currentTrack.title || 'Zuu Track',
+        artist: currentTrack.artist || 'Zuu Music',
         album: currentTrack.album || 'Zuu Music',
         artwork: [
-          { src: currentTrack.cover, sizes: '96x96', type: 'image/jpeg' },
-          { src: currentTrack.cover, sizes: '128x128', type: 'image/jpeg' },
-          { src: currentTrack.cover, sizes: '192x192', type: 'image/jpeg' },
-          { src: currentTrack.cover, sizes: '512x512', type: 'image/jpeg' }
+          { src: currentTrack.cover || '/icon-192.png', sizes: '96x96', type: 'image/jpeg' },
+          { src: currentTrack.cover || '/icon-192.png', sizes: '128x128', type: 'image/jpeg' },
+          { src: currentTrack.cover || '/icon-192.png', sizes: '192x192', type: 'image/jpeg' },
+          { src: currentTrack.cover || '/icon-512.png', sizes: '512x512', type: 'image/jpeg' }
         ]
       });
 
       navigator.mediaSession.setActionHandler('play', () => {
         userExplicitlyPausedRef.current = false;
         const audio = audioRef.current;
-        if (audio && audio.paused) {
-          audio.play().then(() => setIsPlaying(true)).catch(() => {});
+        if (audio) {
+          audio.play().then(() => {
+            setIsPlaying(true);
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+          }).catch(() => {});
         }
       });
+
       navigator.mediaSession.setActionHandler('pause', () => {
         userExplicitlyPausedRef.current = true;
         const audio = audioRef.current;
-        if (audio && !audio.paused) {
+        if (audio) {
           audio.pause();
           setIsPlaying(false);
+          if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
         }
       });
+
       navigator.mediaSession.setActionHandler('previoustrack', () => {
         handlePrevTrack();
       });
+
       navigator.mediaSession.setActionHandler('nexttrack', () => {
         handleNextTrack();
       });
+
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (details.seekTime !== undefined) {
           seekTo(details.seekTime);
         }
       });
-      navigator.mediaSession.setActionHandler('seekbackward', () => {
-        seekTo(Math.max(0, currentTime - 10));
+
+      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+        const audio = audioRef.current;
+        const cur = audio ? audio.currentTime : currentTime;
+        seekTo(Math.max(0, cur - (details.seekOffset || 10)));
       });
-      navigator.mediaSession.setActionHandler('seekforward', () => {
-        seekTo(Math.min(duration, currentTime + 10));
+
+      navigator.mediaSession.setActionHandler('seekforward', (details) => {
+        const audio = audioRef.current;
+        const cur = audio ? audio.currentTime : currentTime;
+        seekTo(Math.min(duration, cur + (details.seekOffset || 10)));
       });
+    } catch (e) {
+      console.warn("MediaSession error:", e);
     }
   }, [currentTrack]);
 
@@ -707,11 +725,8 @@ export const MusicProvider = ({ children }) => {
     setIsPlaying(true);
     userExplicitlyPausedRef.current = false;
 
-    initWebAudio();
-
-    // Stream URL: Both YouTube and catalog tracks stream native audio through HTML5 <audio>
-    // This enables 100% continuous background & lock screen playback on mobile devices!
-    const streamUrl = track.isYouTube ? `/api/stream?id=${track.youtubeId}` : track.audioUrl;
+    // Direct streaming priority: direct MP3 URL first, then YouTube stream/fallback
+    const streamUrl = track.audioUrl || (track.isYouTube ? `/api/stream?id=${track.youtubeId}` : track.fallbackUrl);
 
     const audio = audioRef.current;
     if (!audio) return;
@@ -725,11 +740,19 @@ export const MusicProvider = ({ children }) => {
     if (playPromise !== undefined) {
       playPromise.then(() => {
         setIsPlaying(true);
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'playing';
+        }
       }).catch((err) => {
         console.warn("Direct audio playback catch, trying fallbackUrl:", err);
         if (track.fallbackUrl && audio.src !== track.fallbackUrl) {
           audio.src = track.fallbackUrl;
-          audio.play().then(() => setIsPlaying(true)).catch(() => {});
+          audio.play().then(() => {
+            setIsPlaying(true);
+            if ('mediaSession' in navigator) {
+              navigator.mediaSession.playbackState = 'playing';
+            }
+          }).catch(() => {});
         }
       });
     }
@@ -755,13 +778,15 @@ export const MusicProvider = ({ children }) => {
       userExplicitlyPausedRef.current = true;
       setIsPlaying(false);
       try { audio.pause(); } catch (e) {}
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
       if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
         try { ytPlayer.pauseVideo(); } catch (e) {}
       }
     } else {
       userExplicitlyPausedRef.current = false;
       setIsPlaying(true);
-      initWebAudio();
 
       audio.playbackRate = playbackSpeed;
       audio.volume = isMuted ? 0 : volume;
@@ -770,6 +795,9 @@ export const MusicProvider = ({ children }) => {
       if (playPromise !== undefined) {
         playPromise.then(() => {
           setIsPlaying(true);
+          if ('mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = 'playing';
+          }
           if (isVideoMode && ytPlayer && typeof ytPlayer.playVideo === 'function') {
             try { ytPlayer.playVideo(); } catch (e) {}
           }
@@ -778,7 +806,12 @@ export const MusicProvider = ({ children }) => {
           if (currentTrack?.fallbackUrl && audio.src !== currentTrack.fallbackUrl) {
             audio.src = currentTrack.fallbackUrl;
             audio.load();
-            audio.play().then(() => setIsPlaying(true)).catch(() => {});
+            audio.play().then(() => {
+              setIsPlaying(true);
+              if ('mediaSession' in navigator) {
+                navigator.mediaSession.playbackState = 'playing';
+              }
+            }).catch(() => {});
           }
         });
       }
@@ -833,16 +866,29 @@ export const MusicProvider = ({ children }) => {
 
   const seekTo = (seconds) => {
     setCurrentTime(seconds);
-    const isYt = currentTrack?.isYouTube;
-    const ytPlayer = youtubePlayerRef.current;
+    const audio = audioRef.current;
+    if (audio && !isNaN(seconds)) {
+      try {
+        audio.currentTime = seconds;
+      } catch (e) {}
+    }
 
-    if (isYt && ytPlayer && typeof ytPlayer.seekTo === 'function') {
+    if ('mediaSession' in navigator && 'setPositionState' in navigator.mediaSession && audio) {
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: audio.duration,
+            playbackRate: audio.playbackRate || 1,
+            position: Math.min(seconds, audio.duration)
+          });
+        } catch (e) {}
+      }
+    }
+
+    const ytPlayer = youtubePlayerRef.current;
+    if (isVideoMode && ytPlayer && typeof ytPlayer.seekTo === 'function') {
       try {
         ytPlayer.seekTo(seconds, true);
-      } catch (e) {}
-    } else if (audioRef.current && !isNaN(seconds)) {
-      try {
-        audioRef.current.currentTime = seconds;
       } catch (e) {}
     }
   };
@@ -1263,7 +1309,16 @@ export const MusicProvider = ({ children }) => {
         webkit-playsinline="true"
         x-webkit-airplay="allow"
         preload="auto"
-        className="hidden"
+        style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          width: '1px',
+          height: '1px',
+          opacity: 0.001,
+          pointerEvents: 'none',
+          zIndex: -1
+        }}
       />
       {children}
     </MusicContext.Provider>
