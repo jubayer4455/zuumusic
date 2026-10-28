@@ -331,6 +331,21 @@ export const MusicProvider = ({ children }) => {
     return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
   }, []);
 
+  const triggerInstallApp = () => {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      deferredInstallPrompt.userChoice.then((choiceResult) => {
+        if (choiceResult.outcome === 'accepted') {
+          showToast("Zuu Music installed to Mobile Home Screen! 📱✨");
+          setIsPwaInstalled(true);
+        }
+        setDeferredInstallPrompt(null);
+      });
+    } else {
+      setIsInstallModalOpen(true);
+    }
+  };
+
   // Load stored tracks from device's IndexedDB offline storage on mount
   useEffect(() => {
     const initOfflineStorage = async () => {

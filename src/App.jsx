@@ -117,10 +117,54 @@ function ZuuMusicApp() {
   );
 }
 
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error("Zuu Music caught an error:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-6 text-center select-none">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 flex items-center justify-center mb-4 border border-emerald-500/30">
+            <span className="text-2xl">🎵</span>
+          </div>
+          <h1 className="text-xl font-bold mb-2">Something went wrong</h1>
+          <p className="text-neutral-400 text-xs mb-6 max-w-sm">
+            Zuu Music encountered an issue while loading. Tap below to reload fresh.
+          </p>
+          <button
+            onClick={() => {
+              try {
+                if ('caches' in window) {
+                  caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+                }
+              } catch (e) {}
+              window.location.reload();
+            }}
+            className="px-6 py-2.5 rounded-full bg-[#1ed760] text-black font-bold text-sm hover:scale-105 active:scale-95 transition cursor-pointer"
+          >
+            Reload App 🔄
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <MusicProvider>
-      <ZuuMusicApp />
-    </MusicProvider>
+    <ErrorBoundary>
+      <MusicProvider>
+        <ZuuMusicApp />
+      </MusicProvider>
+    </ErrorBoundary>
   );
 }

@@ -1,5 +1,5 @@
 // Zuu Music Service Worker for Offline & Background Playback
-const CACHE_NAME = 'zuu-music-cache-v4';
+const CACHE_NAME = 'zuu-music-cache-v5';
 const STATIC_ASSETS = [
   '/manifest.json',
   '/icon-192.png',
