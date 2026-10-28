@@ -6,23 +6,16 @@ export const YouTubePlayer = () => {
   const {
     currentTrack,
     isPlaying,
-    setIsPlaying,
     currentTime,
-    setCurrentTime,
-    duration,
-    setDuration,
-    volume,
-    isMuted,
     isVideoMode,
     setIsVideoMode,
-    youtubePlayerRef,
-    handleNextTrack
+    youtubePlayerRef
   } = useMusic();
 
   const containerRef = useRef(null);
   const internalPlayerRef = useRef(null);
 
-  // Initialize YouTube IFrame API
+  // Initialize YouTube IFrame API for Video Canvas
   useEffect(() => {
     if (!window.YT) {
       const tag = document.createElement('script');
@@ -53,38 +46,17 @@ export const YouTubePlayer = () => {
           onReady: (event) => {
             youtubePlayerRef.current = event.target;
             try {
-              if (isMuted) {
-                event.target.mute();
-              } else {
-                event.target.unMute();
-                event.target.setVolume(Math.round(volume * 100));
-              }
+              // Video is kept muted so sound streams 100% cleanly through HTML5 audio element
+              // This guarantees seamless mobile background & lock screen playback without double sound!
+              event.target.mute();
             } catch (e) {}
 
-            if (currentTrack?.isYouTube && currentTrack.youtubeId) {
-              if (isPlaying) {
-                event.target.loadVideoById({
-                  videoId: currentTrack.youtubeId,
-                  startSeconds: currentTime || 0
-                });
-                event.target.playVideo();
-              } else {
-                event.target.cueVideoById(currentTrack.youtubeId);
-              }
-            }
-          },
-          onStateChange: (event) => {
-            // YT.PlayerState.ENDED is 0
-            if (event.data === 0) {
-              handleNextTrack();
-            } else if (event.data === 1) { // PLAYING
-              setIsPlaying(true);
-            } else if (event.data === 2) { // PAUSED
-              // Optional sync if user paused natively inside the video iframe
+            if (currentTrack?.youtubeId) {
+              event.target.cueVideoById(currentTrack.youtubeId);
             }
           },
           onError: (err) => {
-            console.warn("YouTube player warning/fallback:", err?.data);
+            console.warn("YouTube iframe notice:", err?.data);
           }
         }
       });
@@ -105,67 +77,47 @@ export const YouTubePlayer = () => {
     };
   }, []);
 
-  // Poll current time and duration when YouTube track is playing
-  useEffect(() => {
-    let interval;
-    if (isPlaying && currentTrack?.isYouTube) {
-      interval = setInterval(() => {
-        const player = youtubePlayerRef.current;
-        if (player && typeof player.getCurrentTime === 'function') {
-          try {
-            const ct = player.getCurrentTime();
-            const dur = player.getDuration();
-            if (!isNaN(ct) && ct >= 0) {
-              setCurrentTime(ct);
-            }
-            if (!isNaN(dur) && dur > 0) {
-              setDuration(dur);
-            }
-          } catch (e) {}
-        }
-      }, 500);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isPlaying, currentTrack?.isYouTube, currentTrack?.id]);
-
-  // Synchronize playback state changes with YouTube player
+  // When Video Canvas is toggled, sync time and play/pause video
   useEffect(() => {
     const player = youtubePlayerRef.current;
-    if (!player || !currentTrack?.isYouTube) return;
+    if (!player || !currentTrack?.youtubeId) return;
 
-    if (isPlaying) {
-      if (typeof player.playVideo === 'function') {
-        try {
-          if (!isMuted && typeof player.unMute === 'function') player.unMute();
-          player.playVideo();
-        } catch (e) {}
-      }
-    } else {
-      if (typeof player.pauseVideo === 'function') {
-        try {
-          player.pauseVideo();
-        } catch (e) {}
-      }
-    }
-  }, [isPlaying, currentTrack?.isYouTube]);
-
-  // Sync volume & mute changes to YouTube player
-  useEffect(() => {
-    const player = youtubePlayerRef.current;
-    if (!player) return;
-    try {
-      if (isMuted) {
+    if (isVideoMode) {
+      try {
         if (typeof player.mute === 'function') player.mute();
-      } else {
-        if (typeof player.unMute === 'function') player.unMute();
-        if (typeof player.setVolume === 'function') {
-          player.setVolume(Math.round(volume * 100));
+        if (typeof player.seekTo === 'function' && currentTime > 0) {
+          player.seekTo(currentTime, true);
         }
-      }
-    } catch (e) {}
-  }, [volume, isMuted]);
+        if (isPlaying && typeof player.playVideo === 'function') {
+          player.playVideo();
+        }
+      } catch (e) {}
+    } else {
+      try {
+        if (typeof player.pauseVideo === 'function') {
+          player.pauseVideo();
+        }
+      } catch (e) {}
+    }
+  }, [isVideoMode, isPlaying, currentTrack?.youtubeId]);
+
+  // When track changes while Video Mode is open
+  useEffect(() => {
+    const player = youtubePlayerRef.current;
+    if (player && currentTrack?.youtubeId) {
+      try {
+        if (isVideoMode && isPlaying && typeof player.loadVideoById === 'function') {
+          player.loadVideoById({
+            videoId: currentTrack.youtubeId,
+            startSeconds: currentTime || 0
+          });
+          if (typeof player.mute === 'function') player.mute();
+        } else if (typeof player.cueVideoById === 'function') {
+          player.cueVideoById(currentTrack.youtubeId);
+        }
+      } catch (e) {}
+    }
+  }, [currentTrack?.youtubeId]);
 
   return (
     <div 
@@ -180,7 +132,7 @@ export const YouTubePlayer = () => {
         <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5 bg-black/80 backdrop-blur rounded-full px-2.5 py-1">
           <span className="text-[10px] text-white font-bold flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-            Video Canvas (Live)
+            Video Canvas (Sync)
           </span>
           <button 
             onClick={() => setIsVideoMode(false)}

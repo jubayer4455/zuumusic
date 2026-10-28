@@ -309,10 +309,38 @@ export const MusicProvider = ({ children }) => {
     audio.preload = 'auto';
     audio.setAttribute('playsinline', 'true');
     audio.setAttribute('webkit-playsinline', 'true');
+    audio.setAttribute('x-webkit-airplay', 'allow');
 
     if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
       setIsPwaInstalled(true);
     }
+  }, []);
+
+  // 100% Mobile Background & Lock Screen Keep-Alive
+  useEffect(() => {
+    const handleBackgroundWake = () => {
+      if (document.hidden) {
+        // When screen is locked or app is minimized to background
+        if (isPlayingRef.current && !userExplicitlyPausedRef.current) {
+          const audio = audioRef.current;
+          if (audio && audio.paused && audio.src) {
+            audio.play().catch(() => {});
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleBackgroundWake);
+    document.addEventListener('webkitvisibilitychange', handleBackgroundWake);
+    window.addEventListener('pagehide', handleBackgroundWake);
+    window.addEventListener('blur', handleBackgroundWake);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleBackgroundWake);
+      document.removeEventListener('webkitvisibilitychange', handleBackgroundWake);
+      window.removeEventListener('pagehide', handleBackgroundWake);
+      window.removeEventListener('blur', handleBackgroundWake);
+    };
   }, []);
 
   // Capture PWA beforeinstallprompt event
@@ -561,12 +589,11 @@ export const MusicProvider = ({ children }) => {
 
       navigator.mediaSession.setActionHandler('play', () => {
         userExplicitlyPausedRef.current = false;
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+        togglePlay();
       });
       navigator.mediaSession.setActionHandler('pause', () => {
         userExplicitlyPausedRef.current = true;
-        audioRef.current.pause();
-        setIsPlaying(false);
+        togglePlay();
       });
       navigator.mediaSession.setActionHandler('previoustrack', () => {
         handlePrevTrack();
@@ -698,53 +725,30 @@ export const MusicProvider = ({ children }) => {
 
     initWebAudio();
 
-    if (track.isYouTube) {
-      // 1. YouTube track: Route directly to unmuted official YouTube Player!
-      try {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      } catch (e) {}
+    // Stream URL: Both YouTube and catalog tracks stream native audio through HTML5 <audio>
+    // This enables 100% continuous background & lock screen playback on mobile devices!
+    const streamUrl = track.isYouTube ? `/api/stream?id=${track.youtubeId}` : track.audioUrl;
 
-      const ytPlayer = youtubePlayerRef.current;
-      if (ytPlayer) {
-        try {
-          if (isMuted) {
-            if (typeof ytPlayer.mute === 'function') ytPlayer.mute();
-          } else {
-            if (typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
-            if (typeof ytPlayer.setVolume === 'function') ytPlayer.setVolume(Math.round(volume * 100));
-          }
-          if (typeof ytPlayer.loadVideoById === 'function') {
-            ytPlayer.loadVideoById({
-              videoId: track.youtubeId,
-              startSeconds: 0
-            });
-            ytPlayer.playVideo();
-          }
-        } catch (err) {
-          console.warn("YouTube play error:", err);
-        }
-      }
-    } else {
-      // 2. Catalog or local track: Play via HTML5 Audio element!
-      const ytPlayer = youtubePlayerRef.current;
-      if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
-        try { ytPlayer.pauseVideo(); } catch (e) {}
-      }
+    const audio = audioRef.current;
+    audio.pause();
+    audio.playbackRate = playbackSpeed;
+    audio.volume = isMuted ? 0 : volume;
+    audio.src = streamUrl;
+    audio.load();
 
-      const audio = audioRef.current;
-      audio.pause();
-      audio.playbackRate = playbackSpeed;
-      audio.volume = isMuted ? 0 : volume;
-      audio.src = track.audioUrl;
-      audio.load();
-      audio.play().then(() => {
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.then(() => {
         setIsPlaying(true);
       }).catch((err) => {
-        console.warn("Direct audio playback error, falling back if youtubeId available:", err);
+        console.warn("Direct audio playback catch, checking fallback:", err);
+        // Fallback: If HTML5 audio stream fails (e.g. rate limit or offline),
+        // try playing through unmuted YouTube Player:
+        const ytPlayer = youtubePlayerRef.current;
         if (track.youtubeId && ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
           try {
             if (!isMuted && typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
+            if (typeof ytPlayer.setVolume === 'function') ytPlayer.setVolume(Math.round(volume * 100));
             ytPlayer.loadVideoById({ videoId: track.youtubeId, startSeconds: 0 });
             ytPlayer.playVideo();
             setIsPlaying(true);
@@ -752,12 +756,23 @@ export const MusicProvider = ({ children }) => {
         }
       });
     }
+
+    // If user is currently in Video Mode, sync the YouTube iframe canvas visually:
+    if (isVideoMode && track.youtubeId) {
+      const ytPlayer = youtubePlayerRef.current;
+      if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
+        try {
+          if (typeof ytPlayer.mute === 'function') ytPlayer.mute();
+          ytPlayer.loadVideoById({ videoId: track.youtubeId, startSeconds: 0 });
+          ytPlayer.playVideo();
+        } catch (e) {}
+      }
+    }
   };
 
   const togglePlay = () => {
-    const isYt = currentTrack?.isYouTube;
-    const ytPlayer = youtubePlayerRef.current;
     const audio = audioRef.current;
+    const ytPlayer = youtubePlayerRef.current;
 
     if (isPlaying) {
       userExplicitlyPausedRef.current = true;
@@ -771,21 +786,24 @@ export const MusicProvider = ({ children }) => {
       setIsPlaying(true);
       initWebAudio();
 
-      if (isYt) {
-        if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
-          try {
-            if (!isMuted && typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
-            ytPlayer.playVideo();
-          } catch (e) {}
-        }
-      } else {
-        if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
-          try { ytPlayer.pauseVideo(); } catch (e) {}
-        }
-        audio.playbackRate = playbackSpeed;
-        audio.volume = isMuted ? 0 : volume;
-        audio.play().catch((err) => {
+      audio.playbackRate = playbackSpeed;
+      audio.volume = isMuted ? 0 : volume;
+
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          setIsPlaying(true);
+          if (isVideoMode && ytPlayer && typeof ytPlayer.playVideo === 'function') {
+            try { ytPlayer.playVideo(); } catch (e) {}
+          }
+        }).catch((err) => {
           console.warn("Toggle play audio catch:", err);
+          if (currentTrack?.youtubeId && ytPlayer && typeof ytPlayer.playVideo === 'function') {
+            try {
+              if (!isMuted && typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
+              ytPlayer.playVideo();
+            } catch (e) {}
+          }
         });
       }
     }

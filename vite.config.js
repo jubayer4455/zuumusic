@@ -4,6 +4,27 @@ import tailwindcss from '@tailwindcss/vite'
 import { Ytdl, Quality } from '@distube/ytdl-core'
 
 const ytdl = new Ytdl();
+const audioStreamCache = new Map();
+
+async function resolveAudioStream(videoId) {
+  if (audioStreamCache.has(videoId)) {
+    const entry = audioStreamCache.get(videoId);
+    if (Date.now() - entry.time < 3600000) return entry;
+  }
+  const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
+  const format = info.formats.find(f => f.hasAudio && !f.hasVideo && f.container === 'mp4') ||
+                 info.formats.find(f => f.hasAudio && !f.hasVideo);
+  if (!format?.url) throw new Error("No compatible audio format found");
+  const data = {
+    url: format.url,
+    mimeType: format.mimeType?.split(';')[0] || 'audio/mp4',
+    title: info.videoDetails.title || 'Audio Track',
+    contentLength: format.contentLength,
+    time: Date.now()
+  };
+  audioStreamCache.set(videoId, data);
+  return data;
+}
 
 // Custom Vite plugin to stream YouTube audio directly to HTML5 <audio>
 // This enables 100% continuous background playback on mobile when screen is locked or app is minimized!
@@ -19,60 +40,43 @@ function youtubeAudioStreamPlugin() {
           return;
         }
 
-        const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
-        const format = info.formats.find(f => f.hasAudio && !f.hasVideo && f.container === 'mp4') ||
-                       info.formats.find(f => f.hasAudio && !f.hasVideo);
+        const audioData = await resolveAudioStream(videoId);
+        const upstreamHeaders = {};
+        if (req.headers.range) {
+          upstreamHeaders['Range'] = req.headers.range;
+        }
 
-        const contentLength = parseInt(format?.contentLength || '0', 10);
-        const range = req.headers.range;
+        const upstream = await fetch(audioData.url, { headers: upstreamHeaders });
+        res.statusCode = upstream.status;
 
-        res.setHeader('Content-Type', format ? format.mimeType.split(';')[0] : 'audio/mp4');
-        res.setHeader('Accept-Ranges', 'bytes');
+        upstream.headers.forEach((val, key) => {
+          const k = key.toLowerCase();
+          if (['content-type', 'content-length', 'content-range', 'accept-ranges'].includes(k)) {
+            res.setHeader(k, val);
+          }
+        });
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Headers', '*');
 
         if (urlObj.searchParams.get('download') === '1') {
-          const safeTitle = (info.videoDetails.title || 'audio').replace(/[^a-zA-Z0-9_\-\s]/g, '');
+          const safeTitle = (audioData.title || 'audio').replace(/[^a-zA-Z0-9_\-\s]/g, '');
           res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.mp3"`);
         }
 
-        if (range && contentLength > 0) {
-          const parts = range.replace(/bytes=/, '').split('-');
-          const start = parseInt(parts[0], 10);
-          const end = parts[1] ? parseInt(parts[1], 10) : contentLength - 1;
-          const chunksize = (end - start) + 1;
-
-          res.statusCode = 206;
-          res.setHeader('Content-Range', `bytes ${start}-${end}/${contentLength}`);
-          res.setHeader('Content-Length', chunksize);
-
-          const stream = ytdl.download(`https://www.youtube.com/watch?v=${videoId}`, {
-            quality: Quality.HighestAudio,
-            filter: { hasAudio: true, hasVideo: false },
-            range: { start, end }
-          });
-          stream.on('error', (err) => {
-            console.warn('Stream range error:', err.message);
-            if (!res.headersSent) res.statusCode = 500;
-            res.end();
-          });
-          stream.pipe(res);
-        } else {
-          if (contentLength > 0) res.setHeader('Content-Length', contentLength);
-          res.statusCode = 200;
-          const stream = ytdl.download(`https://www.youtube.com/watch?v=${videoId}`, {
-            quality: Quality.HighestAudio,
-            filter: { hasAudio: true, hasVideo: false }
-          });
-          stream.on('error', (err) => {
-            console.warn('Stream direct error:', err.message);
-            if (!res.headersSent) res.statusCode = 500;
-            res.end();
-          });
-          stream.pipe(res);
+        if (req.method === 'HEAD' || !upstream.body) {
+          res.end();
+          return;
         }
+
+        const reader = upstream.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+        res.end();
       } catch (err) {
-        console.error('Audio stream middleware error:', err);
+        console.error('Audio stream middleware error:', err.message);
         if (!res.headersSent) {
           res.statusCode = 500;
           res.end(err.message || 'Error streaming audio');
