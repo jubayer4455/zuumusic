@@ -265,7 +265,6 @@ export const MusicProvider = ({ children }) => {
 
   // Primary Unified Audio Engine
   const audioRef = useRef(new Audio());
-  const synthAudioRef = useRef(null);
   const youtubePlayerRef = useRef(null);
 
   // User explicitly paused ref
@@ -432,52 +431,17 @@ export const MusicProvider = ({ children }) => {
   };
 
   const initWebAudio = () => {
-    if (audioCtxRef.current) {
-      if (audioCtxRef.current.state === 'suspended') {
-        audioCtxRef.current.resume().catch(() => {});
-      }
-      return;
-    }
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      audioCtxRef.current = ctx;
-
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 64;
-      analyserNodeRef.current = analyser;
-
-      const freqs = [60, 250, 1000, 4000, 14000];
-      const filters = freqs.map((freq, idx) => {
-        const filter = ctx.createBiquadFilter();
-        if (idx === 0) {
-          filter.type = 'lowshelf';
-        } else if (idx === freqs.length - 1) {
-          filter.type = 'highshelf';
-        } else {
-          filter.type = 'peaking';
-          filter.Q.value = 1.0;
-        }
-        filter.frequency.value = freq;
-        filter.gain.value = eqGains[idx] || 0;
-        return filter;
-      });
-      eqFiltersRef.current = filters;
-
-      const audio = audioRef.current;
-      audio.crossOrigin = 'anonymous';
-      const source = ctx.createMediaElementSource(audio);
-
-      let curr = source;
-      filters.forEach(f => {
-        curr.connect(f);
-        curr = f;
-      });
-      curr.connect(analyser);
-      analyser.connect(ctx.destination);
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AudioCtx();
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
     } catch (e) {
-      console.warn("Web Audio API notice (fallback to direct audio):", e);
+      console.warn("Web Audio API context:", e);
     }
   };
 
@@ -732,56 +696,98 @@ export const MusicProvider = ({ children }) => {
     setIsPlaying(true);
     userExplicitlyPausedRef.current = false;
 
-    const audio = audioRef.current;
-    audio.pause();
-    if (synthAudioRef.current) clearInterval(synthAudioRef.current);
-
     initWebAudio();
-    audio.playbackRate = playbackSpeed;
 
-    // Stream URL: For YouTube, stream direct native audio from backend endpoint;
-    // For local or catalog tracks, use track.audioUrl:
-    const streamUrl = track.isYouTube ? `/api/stream?id=${track.youtubeId}` : track.audioUrl;
-    audio.src = streamUrl;
-    audio.load();
-    audio.play().catch((err) => {
-      console.warn("Direct audio playback error:", err);
-      startSynthesizedAudioFallback();
-    });
+    if (track.isYouTube) {
+      // 1. YouTube track: Route directly to unmuted official YouTube Player!
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      } catch (e) {}
 
-    // If user has Video Mode opened, sync YouTube iframe video
-    if (isVideoMode && track.isYouTube) {
       const ytPlayer = youtubePlayerRef.current;
-      if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
-        ytPlayer.loadVideoById({ videoId: track.youtubeId, startSeconds: 0 });
+      if (ytPlayer) {
+        try {
+          if (isMuted) {
+            if (typeof ytPlayer.mute === 'function') ytPlayer.mute();
+          } else {
+            if (typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
+            if (typeof ytPlayer.setVolume === 'function') ytPlayer.setVolume(Math.round(volume * 100));
+          }
+          if (typeof ytPlayer.loadVideoById === 'function') {
+            ytPlayer.loadVideoById({
+              videoId: track.youtubeId,
+              startSeconds: 0
+            });
+            ytPlayer.playVideo();
+          }
+        } catch (err) {
+          console.warn("YouTube play error:", err);
+        }
       }
+    } else {
+      // 2. Catalog or local track: Play via HTML5 Audio element!
+      const ytPlayer = youtubePlayerRef.current;
+      if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+        try { ytPlayer.pauseVideo(); } catch (e) {}
+      }
+
+      const audio = audioRef.current;
+      audio.pause();
+      audio.playbackRate = playbackSpeed;
+      audio.volume = isMuted ? 0 : volume;
+      audio.src = track.audioUrl;
+      audio.load();
+      audio.play().then(() => {
+        setIsPlaying(true);
+      }).catch((err) => {
+        console.warn("Direct audio playback error, falling back if youtubeId available:", err);
+        if (track.youtubeId && ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
+          try {
+            if (!isMuted && typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
+            ytPlayer.loadVideoById({ videoId: track.youtubeId, startSeconds: 0 });
+            ytPlayer.playVideo();
+            setIsPlaying(true);
+          } catch (e) {}
+        }
+      });
     }
   };
 
   const togglePlay = () => {
+    const isYt = currentTrack?.isYouTube;
+    const ytPlayer = youtubePlayerRef.current;
     const audio = audioRef.current;
+
     if (isPlaying) {
       userExplicitlyPausedRef.current = true;
-      audio.pause();
-      if (synthAudioRef.current) clearInterval(synthAudioRef.current);
-      if (isVideoMode && youtubePlayerRef.current?.pauseVideo) {
-        youtubePlayerRef.current.pauseVideo();
-      }
       setIsPlaying(false);
+      try { audio.pause(); } catch (e) {}
+      if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+        try { ytPlayer.pauseVideo(); } catch (e) {}
+      }
     } else {
       userExplicitlyPausedRef.current = false;
+      setIsPlaying(true);
       initWebAudio();
-      audio.playbackRate = playbackSpeed;
-      audio.play().then(() => {
-        setIsPlaying(true);
-        if (isVideoMode && youtubePlayerRef.current?.playVideo) {
-          youtubePlayerRef.current.playVideo();
+
+      if (isYt) {
+        if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
+          try {
+            if (!isMuted && typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
+            ytPlayer.playVideo();
+          } catch (e) {}
         }
-      }).catch((err) => {
-        console.warn("Toggle play audio catch:", err);
-        startSynthesizedAudioFallback();
-        setIsPlaying(true);
-      });
+      } else {
+        if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+          try { ytPlayer.pauseVideo(); } catch (e) {}
+        }
+        audio.playbackRate = playbackSpeed;
+        audio.volume = isMuted ? 0 : volume;
+        audio.play().catch((err) => {
+          console.warn("Toggle play audio catch:", err);
+        });
+      }
     }
   };
 
@@ -833,14 +839,17 @@ export const MusicProvider = ({ children }) => {
 
   const seekTo = (seconds) => {
     setCurrentTime(seconds);
-    if (audioRef.current && !isNaN(seconds)) {
-      audioRef.current.currentTime = seconds;
-    }
-    if (isVideoMode && currentTrack?.isYouTube) {
-      const ytPlayer = youtubePlayerRef.current;
-      if (ytPlayer && typeof ytPlayer.seekTo === 'function') {
+    const isYt = currentTrack?.isYouTube;
+    const ytPlayer = youtubePlayerRef.current;
+
+    if (isYt && ytPlayer && typeof ytPlayer.seekTo === 'function') {
+      try {
         ytPlayer.seekTo(seconds, true);
-      }
+      } catch (e) {}
+    } else if (audioRef.current && !isNaN(seconds)) {
+      try {
+        audioRef.current.currentTime = seconds;
+      } catch (e) {}
     }
   };
 
@@ -850,10 +859,39 @@ export const MusicProvider = ({ children }) => {
     if (newVol > 0 && isMuted) {
       setIsMuted(false);
     }
+    if (audioRef.current) {
+      audioRef.current.volume = newVol;
+    }
+    const ytPlayer = youtubePlayerRef.current;
+    if (ytPlayer && typeof ytPlayer.setVolume === 'function') {
+      try {
+        ytPlayer.setVolume(Math.round(newVol * 100));
+        if (newVol > 0 && typeof ytPlayer.unMute === 'function') {
+          ytPlayer.unMute();
+        }
+      } catch (e) {}
+    }
   };
 
   const toggleMute = () => {
-    setIsMuted(!isMuted);
+    setIsMuted(prev => {
+      const next = !prev;
+      if (audioRef.current) {
+        audioRef.current.volume = next ? 0 : volume;
+      }
+      const ytPlayer = youtubePlayerRef.current;
+      if (ytPlayer) {
+        try {
+          if (next) {
+            if (typeof ytPlayer.mute === 'function') ytPlayer.mute();
+          } else {
+            if (typeof ytPlayer.unMute === 'function') ytPlayer.unMute();
+            if (typeof ytPlayer.setVolume === 'function') ytPlayer.setVolume(Math.round(volume * 100));
+          }
+        } catch (e) {}
+      }
+      return next;
+    });
   };
 
   const toggleShuffle = () => {
@@ -1001,19 +1039,6 @@ export const MusicProvider = ({ children }) => {
       }
       return pl;
     }));
-  };
-
-  const startSynthesizedAudioFallback = () => {
-    if (synthAudioRef.current) clearInterval(synthAudioRef.current);
-    synthAudioRef.current = setInterval(() => {
-      setCurrentTime((prev) => {
-        if (prev >= duration) {
-          handleNextTrack();
-          return 0;
-        }
-        return prev + 1;
-      });
-    }, 1000);
   };
 
   const formatTime = (timeInSec) => {

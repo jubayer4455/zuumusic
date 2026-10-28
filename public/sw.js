@@ -36,8 +36,17 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Skip audio streaming and external YouTube API requests from service worker caching
-  if (url.pathname.startsWith('/api/') || url.origin.includes('googleapis.com') || url.origin.includes('youtube.com')) {
+  // Skip audio streaming, range requests, and external media from service worker caching
+  if (
+    url.pathname.startsWith('/api/') || 
+    url.origin.includes('googleapis.com') || 
+    url.origin.includes('youtube.com') || 
+    url.origin.includes('soundhelix.com') ||
+    url.origin.includes('freesound.org') ||
+    url.pathname.endsWith('.mp3') ||
+    url.pathname.endsWith('.m4a') ||
+    event.request.headers.get('range')
+  ) {
     return;
   }
 

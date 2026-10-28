@@ -6,16 +6,23 @@ export const YouTubePlayer = () => {
   const {
     currentTrack,
     isPlaying,
+    setIsPlaying,
     currentTime,
+    setCurrentTime,
+    duration,
+    setDuration,
+    volume,
+    isMuted,
     isVideoMode,
     setIsVideoMode,
-    youtubePlayerRef
+    youtubePlayerRef,
+    handleNextTrack
   } = useMusic();
 
   const containerRef = useRef(null);
   const internalPlayerRef = useRef(null);
 
-  // Initialize YouTube IFrame API for Video / Canvas Mode
+  // Initialize YouTube IFrame API
   useEffect(() => {
     if (!window.YT) {
       const tag = document.createElement('script');
@@ -30,7 +37,7 @@ export const YouTubePlayer = () => {
       internalPlayerRef.current = new window.YT.Player('yt-iframe-player', {
         height: '100%',
         width: '100%',
-        videoId: currentTrack?.youtubeId || 'dQw4w9WgXcQ',
+        videoId: currentTrack?.youtubeId || 'jfKfPfyJRdk',
         playerVars: {
           autoplay: 0,
           controls: 1,
@@ -45,21 +52,39 @@ export const YouTubePlayer = () => {
         events: {
           onReady: (event) => {
             youtubePlayerRef.current = event.target;
-            // Always keep video muted so audio exclusively streams through HTML5 audio element
-            // This prevents sound doubling and guarantees continuous background audio!
             try {
-              event.target.mute();
+              if (isMuted) {
+                event.target.mute();
+              } else {
+                event.target.unMute();
+                event.target.setVolume(Math.round(volume * 100));
+              }
             } catch (e) {}
-            if (currentTrack?.youtubeId) {
-              event.target.cueVideoById(currentTrack.youtubeId);
+
+            if (currentTrack?.isYouTube && currentTrack.youtubeId) {
+              if (isPlaying) {
+                event.target.loadVideoById({
+                  videoId: currentTrack.youtubeId,
+                  startSeconds: currentTime || 0
+                });
+                event.target.playVideo();
+              } else {
+                event.target.cueVideoById(currentTrack.youtubeId);
+              }
             }
           },
-          onStateChange: () => {
-            // Note: Background audio is strictly handled by HTML5 <audio> tag.
-            // We ignore background OS pauses on the video iframe so music never cuts off!
+          onStateChange: (event) => {
+            // YT.PlayerState.ENDED is 0
+            if (event.data === 0) {
+              handleNextTrack();
+            } else if (event.data === 1) { // PLAYING
+              setIsPlaying(true);
+            } else if (event.data === 2) { // PAUSED
+              // Optional sync if user paused natively inside the video iframe
+            }
           },
           onError: (err) => {
-            console.warn("YouTube player warning:", err.data);
+            console.warn("YouTube player warning/fallback:", err?.data);
           }
         }
       });
@@ -73,48 +98,74 @@ export const YouTubePlayer = () => {
 
     return () => {
       if (internalPlayerRef.current && internalPlayerRef.current.destroy) {
-        internalPlayerRef.current.destroy();
+        try {
+          internalPlayerRef.current.destroy();
+        } catch (e) {}
       }
     };
   }, []);
 
-  // When video mode is opened and song is playing, sync position and play video
+  // Poll current time and duration when YouTube track is playing
+  useEffect(() => {
+    let interval;
+    if (isPlaying && currentTrack?.isYouTube) {
+      interval = setInterval(() => {
+        const player = youtubePlayerRef.current;
+        if (player && typeof player.getCurrentTime === 'function') {
+          try {
+            const ct = player.getCurrentTime();
+            const dur = player.getDuration();
+            if (!isNaN(ct) && ct >= 0) {
+              setCurrentTime(ct);
+            }
+            if (!isNaN(dur) && dur > 0) {
+              setDuration(dur);
+            }
+          } catch (e) {}
+        }
+      }, 500);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isPlaying, currentTrack?.isYouTube, currentTrack?.id]);
+
+  // Synchronize playback state changes with YouTube player
   useEffect(() => {
     const player = youtubePlayerRef.current;
     if (!player || !currentTrack?.isYouTube) return;
 
-    if (isVideoMode) {
-      if (typeof player.mute === 'function') player.mute();
-      if (typeof player.seekTo === 'function' && currentTime > 0) {
-        player.seekTo(currentTime, true);
-      }
-      if (isPlaying && typeof player.playVideo === 'function') {
-        player.playVideo();
+    if (isPlaying) {
+      if (typeof player.playVideo === 'function') {
+        try {
+          if (!isMuted && typeof player.unMute === 'function') player.unMute();
+          player.playVideo();
+        } catch (e) {}
       }
     } else {
       if (typeof player.pauseVideo === 'function') {
-        player.pauseVideo();
+        try {
+          player.pauseVideo();
+        } catch (e) {}
       }
     }
-  }, [isVideoMode, isPlaying]);
+  }, [isPlaying, currentTrack?.isYouTube]);
 
-  // When track changes in Video Mode
+  // Sync volume & mute changes to YouTube player
   useEffect(() => {
     const player = youtubePlayerRef.current;
-    if (player && currentTrack?.isYouTube && currentTrack.youtubeId) {
-      if (typeof player.loadVideoById === 'function') {
-        if (isVideoMode && isPlaying) {
-          player.loadVideoById({
-            videoId: currentTrack.youtubeId,
-            startSeconds: currentTime || 0
-          });
-          if (typeof player.mute === 'function') player.mute();
-        } else if (typeof player.cueVideoById === 'function') {
-          player.cueVideoById(currentTrack.youtubeId);
+    if (!player) return;
+    try {
+      if (isMuted) {
+        if (typeof player.mute === 'function') player.mute();
+      } else {
+        if (typeof player.unMute === 'function') player.unMute();
+        if (typeof player.setVolume === 'function') {
+          player.setVolume(Math.round(volume * 100));
         }
       }
-    }
-  }, [currentTrack?.youtubeId]);
+    } catch (e) {}
+  }, [volume, isMuted]);
 
   return (
     <div 
@@ -122,14 +173,14 @@ export const YouTubePlayer = () => {
       className={`transition-all duration-300 shadow-2xl rounded-xl overflow-hidden border border-white/20 bg-black ${
         isVideoMode 
           ? 'fixed bottom-24 right-4 sm:right-6 w-80 sm:w-96 aspect-video opacity-100 scale-100 z-50 pointer-events-auto' 
-          : 'fixed -top-[9999px] left-0 w-1 h-1 opacity-0 pointer-events-none z-[-100]'
+          : 'fixed -bottom-[999px] -right-[999px] w-[320px] h-[180px] opacity-0 pointer-events-none -z-50'
       }`}
     >
       {isVideoMode && (
         <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5 bg-black/80 backdrop-blur rounded-full px-2.5 py-1">
           <span className="text-[10px] text-white font-bold flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-            Video Canvas (Sync)
+            Video Canvas (Live)
           </span>
           <button 
             onClick={() => setIsVideoMode(false)}
