@@ -497,8 +497,10 @@ export const MainContent = () => {
       return matchQuery;
     });
 
-    // Combine local + live YouTube results
-    const combinedResults = [...localFiltered, ...youtubeSearchResults];
+    // Combine live search results first, then local catalog matches
+    const combinedResults = youtubeSearchResults.length > 0
+      ? [...youtubeSearchResults, ...localFiltered.filter(l => !youtubeSearchResults.some(y => y.title.toLowerCase() === l.title.toLowerCase()))]
+      : localFiltered;
 
     return (
       <div className="space-y-6 pb-32">
