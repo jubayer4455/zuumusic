@@ -8,6 +8,8 @@ import {
   Repeat, 
   Repeat1, 
   Heart, 
+  Download,
+  CheckCircle2,
   Volume2, 
   Volume1, 
   VolumeX, 
@@ -58,6 +60,8 @@ export const PlayerBar = () => {
     toggleShuffle,
     toggleRepeat,
     toggleLike,
+    downloadTrack,
+    isDownloaded,
     formatTime,
     showToast
   } = useMusic();
@@ -104,6 +108,20 @@ export const PlayerBar = () => {
           title={isLiked(currentTrack.id) ? "Remove from Liked Songs" : "Save to Liked Songs"}
         >
           <Heart className={`w-5 h-5 ${isLiked(currentTrack.id) ? 'fill-[#1ed760]' : ''}`} />
+        </button>
+
+        <button 
+          onClick={() => downloadTrack(currentTrack)}
+          className={`p-1.5 transition hover:scale-110 ${
+            isDownloaded(currentTrack.id) ? 'text-[#00e5ff]' : 'text-neutral-400 hover:text-white'
+          }`}
+          title={isDownloaded(currentTrack.id) ? "Downloaded for Offline Play" : "Download Song for Offline Play"}
+        >
+          {isDownloaded(currentTrack.id) ? (
+            <CheckCircle2 className="w-5 h-5 text-[#00e5ff] fill-[#00e5ff]/20" />
+          ) : (
+            <Download className="w-5 h-5" />
+          )}
         </button>
 
         {/* Compact dancing visualizer next to track info */}

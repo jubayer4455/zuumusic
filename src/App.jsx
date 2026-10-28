@@ -20,6 +20,7 @@ import { NotificationsModal } from './components/NotificationsModal';
 import { MobileInstallBanner } from './components/MobileInstallBanner';
 import { Toast } from './components/Toast';
 import { YouTubePlayer } from './components/YouTubePlayer';
+import { OfflineDownloadPermissionModal } from './components/OfflineDownloadPermissionModal';
 import { useMusic } from './context/MusicContext';
 
 function ZuuMusicApp() {
@@ -103,6 +104,9 @@ function ZuuMusicApp() {
 
       {/* Modal: Notifications Center */}
       <NotificationsModal />
+
+      {/* Modal: One-Time Offline Storage Permission */}
+      <OfflineDownloadPermissionModal />
 
       {/* Floating Pill Toast Notification */}
       <Toast />

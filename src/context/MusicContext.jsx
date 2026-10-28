@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { ALL_SONGS, PLAYLISTS_META, USER_PROFILE } from '../data/songs';
 import { searchYouTubeMusic, fetchTrendingYouTubeMusic } from '../services/youtubeApi';
+import { 
+  saveOfflineTrack, 
+  getAllOfflineTracks, 
+  getOfflineTrack, 
+  removeOfflineTrack, 
+  clearAllOfflineTracks 
+} from '../services/offlineStorage';
 
 const MusicContext = createContext(null);
 
@@ -206,25 +213,20 @@ export const MusicProvider = ({ children }) => {
   const [sleepTimerSecondsLeft, setSleepTimerSecondsLeft] = useState(null);
   const [isSleepTimerEndOfTrack, setIsSleepTimerEndOfTrack] = useState(false);
 
-  // Downloaded Song IDs from localStorage
+  // Offline Storage & Download State
   const [downloadedSongIds, setDownloadedSongIds] = useState(() => {
     try {
       const saved = localStorage.getItem('zuu_downloaded_songs');
-      return saved ? JSON.parse(saved) : ['song-1', 'song-2'];
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return ['song-1', 'song-2'];
+      return [];
     }
   });
 
-  // Offline / Local Songs State
-  const [offlineTracks, setOfflineTracks] = useState(() => {
-    try {
-      const saved = localStorage.getItem('zuu_offline_cached_tracks');
-      return saved ? JSON.parse(saved) : ALL_SONGS.slice(0, 3).map(s => ({ ...s, isOffline: true }));
-    } catch {
-      return ALL_SONGS.slice(0, 3).map(s => ({ ...s, isOffline: true }));
-    }
-  });
+  const [offlineTracks, setOfflineTracks] = useState([]);
+  const [isDownloadPermissionModalOpen, setIsDownloadPermissionModalOpen] = useState(false);
+  const [pendingDownloadTrack, setPendingDownloadTrack] = useState(null);
+  const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
 
   // PWA Install Prompt
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
@@ -329,20 +331,41 @@ export const MusicProvider = ({ children }) => {
     return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
   }, []);
 
-  const triggerInstallApp = () => {
-    if (deferredInstallPrompt) {
-      deferredInstallPrompt.prompt();
-      deferredInstallPrompt.userChoice.then((choiceResult) => {
-        if (choiceResult.outcome === 'accepted') {
-          showToast("Zuu Music installed to Mobile Home Screen! 📱✨");
-          setIsPwaInstalled(true);
+  // Load stored tracks from device's IndexedDB offline storage on mount
+  useEffect(() => {
+    const initOfflineStorage = async () => {
+      try {
+        const storedTracks = await getAllOfflineTracks();
+        if (storedTracks && storedTracks.length > 0) {
+          setOfflineTracks(storedTracks);
+          setDownloadedSongIds(storedTracks.map(t => t.id));
+        } else {
+          // Initialize with default offline fallback tracks
+          setOfflineTracks(ALL_SONGS.slice(0, 3).map(s => ({ ...s, isOffline: true })));
         }
-        setDeferredInstallPrompt(null);
-      });
-    } else {
-      setIsInstallModalOpen(true);
-    }
-  };
+      } catch (err) {
+        console.warn("Could not load IndexedDB offline tracks:", err);
+      }
+    };
+    initOfflineStorage();
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      showToast("Online • Connected to high-speed cloud 🌐");
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      showToast("Offline Mode • Playing from device storage 📱");
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Sync liked songs to localStorage
   useEffect(() => {
@@ -772,7 +795,7 @@ export const MusicProvider = ({ children }) => {
   }, [volume, isMuted]);
 
   // Handle Track Playback Routing
-  const playTrack = (track, playlist = null) => {
+  const playTrack = async (track, playlist = null) => {
     if (playlist && playlist.length > 0) {
       setCurrentPlaylist(playlist);
     }
@@ -788,8 +811,19 @@ export const MusicProvider = ({ children }) => {
     setIsPlaying(true);
     userExplicitlyPausedRef.current = false;
 
-    // Direct streaming priority: direct MP3 URL first, then YouTube stream/fallback
-    const streamUrl = track.audioUrl || (track.isYouTube ? `/api/stream?id=${track.youtubeId}` : track.fallbackUrl);
+    // Direct streaming priority:
+    // 1. If saved in IndexedDB offline storage, use local Blob URL (plays 100% offline with no internet!)
+    let streamUrl = track.audioUrl;
+    try {
+      const offlineItem = await getOfflineTrack(track.id);
+      if (offlineItem && offlineItem.audioUrl) {
+        streamUrl = offlineItem.audioUrl;
+      }
+    } catch (e) {}
+
+    if (!streamUrl) {
+      streamUrl = track.isYouTube ? `/api/stream?id=${track.youtubeId}` : track.fallbackUrl;
+    }
 
     const audio = audioRef.current;
     if (!audio) return;
@@ -1027,57 +1061,77 @@ export const MusicProvider = ({ children }) => {
 
   const isLiked = (songId) => likedSongIds.includes(songId);
 
-  // Download Track to Mobile Device / Offline Storage
+  // Download Track to Mobile Device / Offline Storage (IndexedDB Binary Blobs)
   const downloadTrack = async (track) => {
     if (!track) return;
-    showToast(`Downloading "${track.title}" to device... ⬇️`);
 
-    setDownloadedSongIds(prev => {
-      const updated = prev.includes(track.id) ? prev : [...prev, track.id];
+    // Check if one-time permission has been granted
+    const hasPermission = localStorage.getItem('zuu_offline_download_permission') === 'granted';
+
+    if (!hasPermission) {
+      setPendingDownloadTrack(track);
+      setIsDownloadPermissionModalOpen(true);
+      return;
+    }
+
+    await executeDownload(track);
+  };
+
+  const confirmDownloadPermission = async () => {
+    try {
+      localStorage.setItem('zuu_offline_download_permission', 'granted');
+    } catch (e) {}
+    setIsDownloadPermissionModalOpen(false);
+    if (pendingDownloadTrack) {
+      await executeDownload(pendingDownloadTrack);
+      setPendingDownloadTrack(null);
+    }
+  };
+
+  const executeDownload = async (track) => {
+    try {
+      showToast(`Saving "${track.title}" to device storage... ⬇️`);
+      triggerHaptic('medium');
+
+      const targetUrl = track.audioUrl || track.fallbackUrl;
+      if (!targetUrl) throw new Error("No stream URL available");
+
+      const response = await fetch(targetUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+
+      // Save real binary audio into device IndexedDB storage
+      await saveOfflineTrack(track, blob);
+
+      const blobUrl = URL.createObjectURL(blob);
+      const offlineItem = {
+        ...track,
+        audioUrl: blobUrl,
+        fallbackUrl: blobUrl,
+        isOffline: true,
+        isDownloaded: true,
+        dateAdded: 'Downloaded'
+      };
+
+      setDownloadedSongIds(prev => Array.from(new Set([...prev, track.id])));
+      setOfflineTracks(prev => [offlineItem, ...prev.filter(t => t.id !== track.id)]);
+
+      // Browser file download trigger
       try {
-        localStorage.setItem('zuu_downloaded_songs', JSON.stringify(updated));
-      } catch (e) {}
-      return updated;
-    });
-
-    setOfflineTracks(prev => {
-      if (prev.some(t => t.id === track.id)) return prev;
-      const offlineItem = { ...track, isOffline: true, dateAdded: 'Downloaded' };
-      const updated = [offlineItem, ...prev];
-      try {
-        localStorage.setItem('zuu_offline_cached_tracks', JSON.stringify(updated.slice(0, 50)));
-      } catch (e) {}
-      return updated;
-    });
-
-    const targetUrl = track.isYouTube
-      ? `/api/stream?id=${track.youtubeId}&download=1`
-      : track.audioUrl;
-
-    if (targetUrl && !targetUrl.startsWith('blob:')) {
-      try {
-        const response = await fetch(targetUrl);
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = blobUrl;
         a.download = `${track.title} - ${track.artist || 'Zuu Music'}.mp3`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-      } catch (err) {
-        const a = document.createElement('a');
-        a.href = targetUrl;
-        a.download = `${track.title}.mp3`;
-        a.target = '_blank';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }
-    }
+      } catch (e) {}
 
-    showToast(`"${track.title}" downloaded! Available in Offline Library ✅`);
+      showToast(`"${track.title}" downloaded! Available offline anytime ✅`);
+      triggerHaptic('heavy');
+    } catch (err) {
+      console.warn("IndexedDB offline download error:", err);
+      showToast(`Download error: ${err.message || 'Network issue'} ⚠️`);
+    }
   };
 
   const isDownloaded = (trackId) => downloadedSongIds.includes(trackId);
@@ -1347,11 +1401,12 @@ export const MusicProvider = ({ children }) => {
       setCrossfadeSec,
       normalizeAudio,
       setNormalizeAudio,
-      clearOfflineCache: () => {
+      clearOfflineCache: async () => {
         const count = offlineTracks.length;
         setOfflineTracks([]);
         setDownloadedSongIds([]);
         try {
+          await clearAllOfflineTracks();
           localStorage.removeItem('zuu_offline_cached_tracks');
           localStorage.removeItem('zuu_downloaded_songs');
         } catch {}
@@ -1363,7 +1418,13 @@ export const MusicProvider = ({ children }) => {
         for (const tr of tracks.slice(0, 5)) {
           await downloadTrack(tr);
         }
-      }
+      },
+      // Offline Storage Permission & State
+      isDownloadPermissionModalOpen,
+      setIsDownloadPermissionModalOpen,
+      pendingDownloadTrack,
+      confirmDownloadPermission,
+      isOnline
     }}>
       <audio
         ref={audioRef}
